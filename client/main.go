@@ -14,11 +14,14 @@ import (
 	"github.com/go-kit/kit/sd"
 	"github.com/go-kit/kit/sd/etcdv3"
 	"github.com/go-kit/kit/sd/lb"
+	"github.com/go-kit/kit/tracing/zipkin"
+	grpctransport "github.com/go-kit/kit/transport/grpc"
+	opzipkin "github.com/openzipkin/zipkin-go"
+	"github.com/openzipkin/zipkin-go/reporter/http"
 	"google.golang.org/grpc"
 )
 
 func main() {
-
 	var (
 		//注册中心地址
 		etcdServer = "127.0.0.1:2379"
@@ -29,11 +32,11 @@ func main() {
 	//对hystrix进行配置
 	commandName := "my_endpoint"
 	hystrix.ConfigureCommand(commandName, hystrix.CommandConfig{
-		Timeout:                1000 * 3, //超时
-		MaxConcurrentRequests:  100,      //最大并发的请求数
-		RequestVolumeThreshold: 5,        //请求量阈值
-		SleepWindow:            10000,    //熔断开启多久尝试发起一次请求
-		ErrorPercentThreshold:  1,        //误差阈值百分比
+		Timeout:                1000 * 30, //超时
+		MaxConcurrentRequests:  100,       //最大并发的请求数
+		RequestVolumeThreshold: 5,         //请求量阈值
+		SleepWindow:            1000 * 10, //熔断开启多久尝试发起一次请求
+		ErrorPercentThreshold:  1,         //误差阈值百分比
 	})
 	breakerMw := circuitbreaker.Hystrix(commandName) //定义熔断器中间件
 	options := etcdv3.ClientOptions{
@@ -52,7 +55,7 @@ func main() {
 		panic(err)
 	}
 	//创建端点管理器， 此管理器根据Factory和监听的到实例创建endPoint并订阅instancer的变化动态更新Factory创建的endPoint
-	endpointer := sd.NewEndpointer(instancer, reqFactory, logger) //reqFactory自定义的函数，主要用于端点层（endpoint）接受并显示数据
+	endpointer := sd.NewEndpointer(instancer, reqFactory, logger)
 	//创建负载均衡器
 	balancer := lb.NewRoundRobin(endpointer)
 
@@ -60,7 +63,6 @@ func main() {
 	我们可以通过负载均衡器直接获取请求的endPoint，发起请求
 	reqEndPoint,_ := balancer.Endpoint()
 	*/
-
 	/**
 	也可以通过retry定义尝试次数进行请求
 	*/
@@ -68,16 +70,12 @@ func main() {
 
 	//增加熔断中间件
 	reqEndPoint = breakerMw(reqEndPoint)
-
 	//现在我们可以通过 endPoint 发起请求了
+
 	req := struct{}{}
-	for i := 0; i < 20; i++ { //发生20次请求
-		ctx = context.Background()
+	for i := 1; i <= 30; i++ {
 		if _, err = reqEndPoint(ctx, req); err != nil {
-			//panic(err)
-			fmt.Println("当前时间: ", time.Now().Format("2006-01-02 15:04:05.99"), "\t第", i+1, "次")
 			fmt.Println(err)
-			time.Sleep(1 * time.Second)
 		}
 	}
 }
@@ -85,22 +83,60 @@ func main() {
 //通过传入的 实例地址  创建对应的请求endPoint
 func reqFactory(instanceAddr string) (endpoint.Endpoint, io.Closer, error) {
 	return func(ctx context.Context, request interface{}) (interface{}, error) {
+		fmt.Println("请求服务: ", instanceAddr, "当前时间: ", time.Now().Format("2006-01-02 15:04:05.99"))
 		conn, err := grpc.Dial(instanceAddr, grpc.WithInsecure())
 		if err != nil {
 			fmt.Println(err)
 			panic("connect error")
 		}
-		defer conn.Close()
-		bookClient := book.NewBookServiceClient(conn)
-		bi, _ := bookClient.GetBookInfo(context.Background(), &book.BookInfoParams{BookId: 1})
+
+		//追踪设置
+		reporter := http.NewReporter("http://localhost:9411/api/v2/spans") //追踪地址
+		defer reporter.Close()
+
+		zkTracer, err := opzipkin.NewTracer(reporter)     //新建追踪器
+		zkClientTrace := zipkin.GRPCClientTrace(zkTracer) //启动追踪器Client端
+
+		bookInfoRequest := grpctransport.NewClient(
+			conn,
+			"BookService",
+			"GetBookInfo",
+			func(_ context.Context, in interface{}) (interface{}, error) { return nil, nil },
+			func(_ context.Context, out interface{}) (interface{}, error) {
+				return out, nil
+			},
+			book.BookInfo{},
+			zkClientTrace, //追踪客户端
+		).Endpoint()
+
+		bookListRequest := grpctransport.NewClient(
+			conn,
+			"BookService",
+			"GetBookList",
+			func(_ context.Context, in interface{}) (interface{}, error) { return nil, nil },
+			func(_ context.Context, out interface{}) (interface{}, error) {
+				return out, nil
+			},
+			book.BookList{},
+			zkClientTrace,
+		).Endpoint()
+
+		parentSpan := zkTracer.StartSpan("bookCaller")
+		defer parentSpan.Flush()
+
+		ctx = opzipkin.NewContext(ctx, parentSpan)
+		infoRet, _ := bookInfoRequest(ctx, request)
+		bi := infoRet.(*book.BookInfo)
 		fmt.Println("获取书籍详情")
 		fmt.Println("bookId: 1", " => ", "bookName:", bi.BookName)
-		fmt.Println("请求服务成功: ", instanceAddr, "当前时间为:", time.Now().Format("2006-01-02 15:04:05.99"))
-		/*bl, _ := bookClient.GetBookList(context.Background(), &book.BookListParams{Page: 1, Limit: 10})
+
+		listRet, _ := bookListRequest(ctx, request)
+		bl := listRet.(*book.BookList)
 		fmt.Println("获取书籍列表")
 		for _, b := range bl.BookList {
 			fmt.Println("bookId:", b.BookId, " => ", "bookName:", b.BookName)
-		}*/
+		}
+
 		return nil, nil
 	}, nil, nil
 }
