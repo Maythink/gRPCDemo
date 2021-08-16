@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"gRPCDemo/book"
 	"math/rand"
 	"net"
@@ -88,14 +89,14 @@ func main() {
 		//服务的信息目录
 		prefix = "/services/book/"
 		//当前启动服务实例的地址
-		instance = "127.0.0.1:50051"
+		instance = "127.0.0.1:50061"
 		//服务实例注册的路径
 		key = prefix + instance
 		//服务实例注册的val
 		value = instance
 		ctx   = context.Background()
 		//服务监听地址
-		serviceAddress = ":50051"
+		serviceAddress = ":50061"
 	)
 
 	//etcd的连接参数
@@ -148,7 +149,11 @@ func main() {
 	)
 	bookServer.bookInfoHandler = bookInfoHandler
 
-	ls, _ := net.Listen("tcp", serviceAddress)
+	ls, err := net.Listen("tcp", serviceAddress)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	gs := grpc.NewServer(grpc.UnaryInterceptor(grpctransport.Interceptor))
 	book.RegisterBookServiceServer(gs, bookServer)
 	gs.Serve(ls)

@@ -99,7 +99,7 @@ func reqFactory(instanceAddr string) (endpoint.Endpoint, io.Closer, error) {
 
 		bookInfoRequest := grpctransport.NewClient(
 			conn,
-			"BookService",
+			"book.BookService",
 			"GetBookInfo",
 			func(_ context.Context, in interface{}) (interface{}, error) { return nil, nil },
 			func(_ context.Context, out interface{}) (interface{}, error) {
@@ -111,7 +111,7 @@ func reqFactory(instanceAddr string) (endpoint.Endpoint, io.Closer, error) {
 
 		bookListRequest := grpctransport.NewClient(
 			conn,
-			"BookService",
+			"book.BookService",
 			"GetBookList",
 			func(_ context.Context, in interface{}) (interface{}, error) { return nil, nil },
 			func(_ context.Context, out interface{}) (interface{}, error) {
@@ -125,12 +125,18 @@ func reqFactory(instanceAddr string) (endpoint.Endpoint, io.Closer, error) {
 		defer parentSpan.Flush()
 
 		ctx = opzipkin.NewContext(ctx, parentSpan)
-		infoRet, _ := bookInfoRequest(ctx, request)
+		infoRet, err := bookInfoRequest(ctx, request)
+		if err != nil {
+			return nil, err
+		}
 		bi := infoRet.(*book.BookInfo)
 		fmt.Println("获取书籍详情")
 		fmt.Println("bookId: 1", " => ", "bookName:", bi.BookName)
 
-		listRet, _ := bookListRequest(ctx, request)
+		listRet, err := bookListRequest(ctx, request)
+		if err != nil {
+			return nil, err
+		}
 		bl := listRet.(*book.BookList)
 		fmt.Println("获取书籍列表")
 		for _, b := range bl.BookList {
