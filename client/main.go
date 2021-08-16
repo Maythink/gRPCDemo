@@ -52,19 +52,21 @@ func main() {
 	/**
 	也可以通过retry定义尝试次数进行请求
 	*/
-	reqEndPoint := lb.Retry(3, 3*time.Second, balancer)
+	reqEndPoint := lb.Retry(30, 30*time.Second, balancer) //请求次数为30，时间为30S（时间需要多于服务器限流时间3s）
 
 	//现在我们可以通过 endPoint 发起请求了
-	req := struct{}{}
-	if _, err = reqEndPoint(ctx, req); err != nil {
-		panic(err)
+	for i := 0; i < 10; i++ { //发送10次请求
+		req := struct{}{}
+		ctx = context.Background()
+		if _, err = reqEndPoint(ctx, req); err != nil {
+			panic(err)
+		}
 	}
 }
 
 //通过传入的 实例地址  创建对应的请求endPoint
 func reqFactory(instanceAddr string) (endpoint.Endpoint, io.Closer, error) {
 	return func(ctx context.Context, request interface{}) (interface{}, error) {
-		fmt.Println("请求服务: ", instanceAddr)
 		conn, err := grpc.Dial(instanceAddr, grpc.WithInsecure())
 		if err != nil {
 			fmt.Println(err)
@@ -75,12 +77,12 @@ func reqFactory(instanceAddr string) (endpoint.Endpoint, io.Closer, error) {
 		bi, _ := bookClient.GetBookInfo(context.Background(), &book.BookInfoParams{BookId: 1})
 		fmt.Println("获取书籍详情")
 		fmt.Println("bookId: 1", " => ", "bookName:", bi.BookName)
-
-		bl, _ := bookClient.GetBookList(context.Background(), &book.BookListParams{Page: 1, Limit: 10})
+		fmt.Println("请求服务成功: ", instanceAddr, "当前时间为:", time.Now().Format("2006-01-02 15:04:05.99"))
+		/*bl, _ := bookClient.GetBookList(context.Background(), &book.BookListParams{Page: 1, Limit: 10})
 		fmt.Println("获取书籍列表")
 		for _, b := range bl.BookList {
 			fmt.Println("bookId:", b.BookId, " => ", "bookName:", b.BookName)
-		}
+		}*/
 		return nil, nil
 	}, nil, nil
 }

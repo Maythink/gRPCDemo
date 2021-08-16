@@ -9,8 +9,10 @@ import (
 
 	"github.com/go-kit/kit/endpoint"
 	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/ratelimit"
 	"github.com/go-kit/kit/sd/etcdv3"
 	grpc_transport "github.com/go-kit/kit/transport/grpc"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 )
 
@@ -106,20 +108,23 @@ func main() {
 	registrar := etcdv3.NewRegistrar(client, etcdv3.Service{Key: key, Value: value}, log.NewNopLogger())
 	registrar.Register() //启动注册服务
 	bookServer := new(BookServer)
+	bookInfoEndPoint := makeGetBookInfoEndpoint()
+	//rate路径：golang.org/x/time/rate
+	limiter := rate.NewLimiter(rate.Every(time.Second*3), 1) //限流3秒，临牌数：1
+	//通过DelayingLimiter中间件，在bookInfoEndPoint 的外层再包裹一层限流的endPoint
+	bookInfoEndPoint = ratelimit.NewDelayingLimiter(limiter)(bookInfoEndPoint)
 	bookListHandler := grpc_transport.NewServer(
 		makeGetBookListEndpoint(),
 		decodeRequest,
 		encodeResponse,
 	)
 	bookServer.bookListHandler = bookListHandler
-
 	bookInfoHandler := grpc_transport.NewServer(
-		makeGetBookInfoEndpoint(),
+		bookInfoEndPoint,
 		decodeRequest,
 		encodeResponse,
 	)
 	bookServer.bookInfoHandler = bookInfoHandler
-
 	listener, err := net.Listen("tcp", serviceAddress) //网络监听，注意对应的包为："net"
 	if err != nil {
 		fmt.Println(err)
