@@ -127,7 +127,8 @@ func main() {
 	bookListEndPoint := makeGetBookListEndpoint()
 	//创建限流器 1r/s  limiter := rate.NewLimiter(rate.Every(time.Second * 1), 100000)
 	//通过DelayingLimiter中间件，在bookListEndPoint的外层再包裹一层限流的endPoint
-	limiter := rate.NewLimiter(rate.Every(time.Second*1), 1) //限流1秒，临牌数：1
+	limiter := rate.NewLimiter(rate.Every(time.Second*3), 1) //限流每隔r秒生成1个，临牌容量
+	// limiter := rate.NewLimiter(3, 1)                         //限流每秒生成r个令牌，临牌容量
 	bookListEndPoint = ratelimit.NewDelayingLimiter(limiter)(bookListEndPoint)
 
 	bookListHandler := grpctransport.NewServer(
