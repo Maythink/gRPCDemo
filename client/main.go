@@ -7,6 +7,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/afex/hystrix-go/hystrix"
+	"github.com/go-kit/kit/circuitbreaker"
 	"github.com/go-kit/kit/endpoint"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/sd"
@@ -24,6 +26,16 @@ func main() {
 		prefix = "/services/book/"
 		ctx    = context.Background()
 	)
+	//对hystrix进行配置
+	commandName := "my_endpoint"
+	hystrix.ConfigureCommand(commandName, hystrix.CommandConfig{
+		Timeout:                1000 * 3, //超时
+		MaxConcurrentRequests:  100,      //最大并发的请求数
+		RequestVolumeThreshold: 5,        //请求量阈值
+		SleepWindow:            10000,    //熔断开启多久尝试发起一次请求
+		ErrorPercentThreshold:  1,        //误差阈值百分比
+	})
+	breakerMw := circuitbreaker.Hystrix(commandName) //定义熔断器中间件
 	options := etcdv3.ClientOptions{
 		DialTimeout:   time.Second * 3,
 		DialKeepAlive: time.Second * 3,
@@ -52,14 +64,20 @@ func main() {
 	/**
 	也可以通过retry定义尝试次数进行请求
 	*/
-	reqEndPoint := lb.Retry(30, 30*time.Second, balancer) //请求次数为30，时间为30S（时间需要多于服务器限流时间3s）
+	reqEndPoint := lb.Retry(3, 100*time.Second, balancer) //请求次数为3，时间为10S（时间需要多于服务器限流时间3s）
+
+	//增加熔断中间件
+	reqEndPoint = breakerMw(reqEndPoint)
 
 	//现在我们可以通过 endPoint 发起请求了
-	for i := 0; i < 10; i++ { //发送10次请求
-		req := struct{}{}
+	req := struct{}{}
+	for i := 0; i < 20; i++ { //发生20次请求
 		ctx = context.Background()
 		if _, err = reqEndPoint(ctx, req); err != nil {
-			panic(err)
+			//panic(err)
+			fmt.Println("当前时间: ", time.Now().Format("2006-01-02 15:04:05.99"), "\t第", i+1, "次")
+			fmt.Println(err)
+			time.Sleep(1 * time.Second)
 		}
 	}
 }
